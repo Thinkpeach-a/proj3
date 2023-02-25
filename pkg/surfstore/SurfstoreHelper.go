@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -40,7 +41,7 @@ const createTable string = `create table if not exists indexes (
 		hashValue TEXT
 	);`
 
-const insertTuple string = ``
+const insertTuple string = `insert into indexes (fileName, version, hashIndex, hashValue) values(`
 
 // WriteMetaFile writes the file meta map back to local metadata file index.db
 func WriteMetaFile(fileMetas map[string]*FileMetaData, baseDir string) error {
@@ -52,6 +53,9 @@ func WriteMetaFile(fileMetas map[string]*FileMetaData, baseDir string) error {
 			log.Fatal("Error During Meta Write Back")
 		}
 	}
+	// create the file
+	indexFile, _ := os.Create(outputMetaPath)
+	defer indexFile.Close()
 	db, err := sql.Open("sqlite3", outputMetaPath)
 	if err != nil {
 		log.Fatal("Error During Meta Write Back")
@@ -61,7 +65,23 @@ func WriteMetaFile(fileMetas map[string]*FileMetaData, baseDir string) error {
 		log.Fatal("Error During Meta Write Back")
 	}
 	statement.Exec()
-	panic("todo")
+	// 1. read all the fileMetaData and write them back to the database file
+	for _, value := range fileMetas {
+		curStatement := "" + insertTuple
+		curStatement += ("'" + value.Filename + "', " + strconv.Itoa(int(value.Version)))
+		for curIndex, curStr := range value.BlockHashList {
+			curHashIndex := ", " + strconv.Itoa(curIndex)
+			curHash := ", '" + curStr + "')"
+			finalStatement := curStatement + curHashIndex + curHash
+			//fmt.Println(finalStatement)
+			statement, err := db.Prepare(finalStatement)
+			if err != nil {
+				log.Fatal("Error During database insert")
+			}
+			statement.Exec()
+		}
+	}
+	return nil
 }
 
 /*
@@ -85,7 +105,36 @@ func LoadMetaFromMetaFile(baseDir string) (fileMetaMap map[string]*FileMetaData,
 	if err != nil {
 		log.Fatal("Error When Opening Meta")
 	}
-	panic("todo")
+	// 1. load the whole database 2. construct newe struct FileMetaMap
+	// 3. fill in the filemetamap using the rows: 4. add to fileMetaMap
+	rows, err := db.Query("SELECT * FROM indexes ORDER BY fileName, hashIndex ASC")
+	if err != nil {
+		log.Fatal("load database error")
+		return nil, err
+	}
+	for rows.Next() {
+		var dbFileName string
+		var dbFileVersion int32
+		var dbHashIndex int
+		var dbHash string
+		err = rows.Scan(&dbFileName, &dbFileVersion, &dbHashIndex, &dbHash)
+		if err != nil {
+			log.Fatal("scan row error")
+		}
+		//log.Println(dbFileName, ": ", dbHashIndex)
+		// if empty: construct a new filemata
+		if _, ok := fileMetaMap[dbFileName]; !ok {
+			curFileMetaData := &FileMetaData{}
+			curFileMetaData.Filename = dbFileName
+			curFileMetaData.Version = dbFileVersion
+			curFileMetaData.BlockHashList = append(curFileMetaData.BlockHashList, dbHash)
+			fileMetaMap[dbFileName] = curFileMetaData
+		} else {
+			fileMetaMap[dbFileName].BlockHashList = append(fileMetaMap[dbFileName].BlockHashList, dbHash)
+		}
+
+	}
+	return fileMetaMap, nil
 }
 
 /*
